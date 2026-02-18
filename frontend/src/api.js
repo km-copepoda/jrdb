@@ -2,7 +2,7 @@ const BASE = '/api/ml'
 
 export async function fetchRaces(filters) {
     const params = new URLSearchParams()
-    Object.entries(filters).forEach(([KeyboardEvent, v]) => {
+    Object.entries(filters).forEach(([k, v]) => {
         if (v !== '' && v !== null && v !== undefined) params.append(k, v)
     })
     const res = await fetch(`${BASE}/races/?${params}`)
