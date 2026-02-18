@@ -1,0 +1,10 @@
+django
+pandas
+numpy
+django-rest-framework
+django-filter
+psycopg2
+
+
+
+#django-database-view
