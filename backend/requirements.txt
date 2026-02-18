@@ -3,4 +3,4 @@ pandas
 numpy
 django-rest-framework
 django-filter
-psycopg2-binaly
+psycopg2-binary
