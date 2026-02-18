@@ -17,13 +17,7 @@ import unittest
 import django
 from django.conf import settings
 
-from database.management.common import getColumnsDict, replaceSJIS
-from database.models.GradeInformation import *
-from database.models.helpers import *
-from database.models.PreviousDayInformation import *
-from database.models.ThatDayInformation import *
-
-# テスト用にインメモリSQLiteを使用
+# テスト用にインメモリSQLiteを使用(モデルインポート前に設定が必要)
 if not settings.configured:
     settings.configure(
         DATABASES={
@@ -40,6 +34,12 @@ if not settings.configured:
         DEFAULT_AUTO_FIELD="django.db.models.BigAutoField",
     )
     django.setup()
+
+from database.management.common import getColumnsDict, replaceSJIS
+from database.models.GradeInformation import *
+from database.models.helpers import *
+from database.models.PreviousDayInformation import *
+from database.models.ThatDayInformation import *
 
 # サンプルデータディレクトリ
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "datas", "temp")
@@ -1185,6 +1185,45 @@ class TestKnownBugs(unittest.TestCase):
                 p.strip().isdigit() or p.strip() == "",
                 f"着数パートが数字ではありません: {repr(p)}",
             )
+
+    def test_三連複オッズ_to_dict_key_has_3_elements(self):
+        """3連複オッズ_to_dict() のキーが3個タプルになっている"""
+        path = os.path.join(DATA_DIR, "OT170105.txt")
+        if not os.path.exists(path):
+            self.skipTest("OT170105.txt が見つかりません")
+        raw = read_first_line("OT170105.txt").decode("sjis")
+        # OT の colspecs: n_fk=2, ofset=2
+        # 場コード(2) + 年(2) + 回(1) + 日(1) + R(2) + 登録頭数(2) = 10 chars header
+        # 三連複オッズ starts at char 10, length 4896
+        instance = 前日_基準三連複情報()
+        instance.三連複オッズ = raw[10 : 10 + 4896]
+        result = instance.三連複オッズ_to_dict()
+        # キーがすべて3要素タプルかかｋかｋか確認
+        for key in result.keys():
+            self.assertIsInstance(key, tuple, f"キーがタプルではない: {key}")
+            self.assertEqual(len(key), 3, f"キーが3要素ではない: {key}")
+            # C(18, 3) = 816 通りのうちから出ない組み合わせが正しいか
+            self.assertLessEqual(len(result), 816)
+            # 空でないエントリ
+            self.assertGreater(len(result), 0)
+
+    def test_単勝オッズ_cap_boundary(self):
+        """単勝オッズ 999.9倍が正しく変える( < 1000)"""
+        instance = 前日_基準単複連情報()
+        # 999.9 倍を表す文字列  (5byte)
+        instance.単勝オッズ = "999.9" + " " * 85
+        instance.複勝オッズ = " " * 90
+        instance.連勝オッズ = " " * 765
+        result = instance.単勝オッズ_to_dict()
+        self.assertAlmostEqual(result["1"], 999.9, places=1)
+
+    def test_三連複オッズ_cab_boundary(self):
+        """三連複オッズ 9999.9倍が正しく帰る ( < 10000)"""
+        instance = 前日_基準三連複情報()
+        # 先頭エントリ(1, 2, 3) に9999.9倍を設定
+        instance.三連複オッズ = "9999.9" + " " * (4896 - 6)
+        result = instance.三連複オッズ_to_dict()
+        self.assertAlmostEqual(result[(1, 2, 3)], 9999.9, places=1)
 
 
 # ----------------------------------------------------------------------
