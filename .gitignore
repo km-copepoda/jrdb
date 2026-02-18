@@ -14,7 +14,7 @@ npm-debug.log
 yarn-debug.log
 yarn-error.log
 .eslintcache
-database/temp/*
+backend/database/temp/*
 
 # --- Backend (Python  FastAPI) ---
 __pycache__

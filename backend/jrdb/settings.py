@@ -59,7 +59,7 @@ ROOT_URLCONF = 'jrdb.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [os.path.join(BASE_DIR, 'frontend', dist)],
+        'DIRS': [os.path.join(BASE_DIR, '..', 'frontend', 'dist')],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -128,7 +128,7 @@ USE_TZ = True
 
 STATIC_URL = '/static/'
 
-_frontend_assets = os.path.join(BASE_DIR, 'frontend', 'dist', 'assets')
+_frontend_assets = os.path.join(BASE_DIR, '..', 'frontend', 'dist', 'assets')
 STATICFILES_DIRS = [_frontend_assets] if os.path.exists(_frontend_assets) else []
 
 REST_FRAMEWORK = {
