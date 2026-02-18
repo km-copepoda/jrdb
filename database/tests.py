@@ -966,47 +966,16 @@ class TestCodeMasters(unittest.TestCase):
         codes = dict(種別コード)
         self.assertEqual(codes["12"], "３歳")
 
-    # BUG-3: グレードコード
-    def test_グレードコード_BUG3_空文字キーではない(self):
-        """
-        BUG-3: helpers.py では "" (L リステッド競走) だが
-        JRDBコードマスタでは "6" -> L。
-        空文字キーはデータに存在しないので(BUG-3)
-        """
+    def test_グレードコード_L_キーは6(self):
         codes = dict(グレードコード)
-        # 現在の実装: "" がキー
-        self.assertIn("", codes, "グレードコードに空文字キーが存在する(BUG-3)")
-        # 本来は "6" がキーであるべき
-        self.assertNotIn("6", codes)
+        self.assertIn("6", codes)
+        self.assertNotIn("", codes)
 
-    # BUG-4: クラスコード
-    def test_クラスコード_BUG4_07は旧表記(self):
-        """
-        BUG-4: 2019年以降 1600万 -> 3勝 に変更されたが helpers.py は旧表記のまま
-        """
+    def test_クラスコード_07は3勝(self):
         codes = dict(クラスコード)
-        # 現在の実装: 旧表記
-        self.assertEqual(
-            codes["07"],
-            "芝1600万A",
-            "クラスコード07が現在も旧表記であることを確認(BUG-4)",
-        )
-        # 正しい値は '芝3勝A' であるべき
-        self.assertNotEqual(
-            codes["07"], "芝3勝A", "クラスコード07はまだ未修正 (BUG-4未修正)"
-        )
-
-    def test_クラスコード_BUG4_10は旧表記(self):
-        codes = dict(クラスコード)
-        self.assertEqual(
-            codes["10"], "芝1000万A", "クラスコード10の旧表記存在を確認 (BUG-4)"
-        )
-
-    def test_クラスコード_BUG4_13は旧表記(self):
-        codes = dict(クラスコード)
-        self.assertEqual(
-            codes["13"], "芝500万A", "クラスコード13の旧表記存在を確認 (BUG-4)"
-        )
+        self.assertEqual(codes["07"], "芝3勝A")
+        self.assertEqual(codes["10"], "芝2勝A")
+        self.assertEqual(codes["13"], "芝1勝A")
 
 
 # ----------------------------------------------------------------------
@@ -1143,18 +1112,16 @@ class TestKnownBugs(unittest.TestCase):
             field = next(f for f in 前日_競走馬拡張._meta.fields if f.name == name)
             self.assertEqual(field.max_length, 3, f"{name}のmax_lengthが3ではありません")
 
-    def test_BUG3_グレードコード_key_is_empty_string(self):
-        """BUG-3: グレードコード "6" -> L が未定義で "" キーが使われている"""
+    def test_BUG3_グレードコード_key_is_6(self):
         codes = dict(グレードコード)
-        self.assertIn("", codes)
-        self.assertNotIn("6", codes)
+        self.assertIn("6", codes)
+        self.assertNotIn("", codes)
 
-    def test_BUG4_クラスコード_uses_old_naming(self):
-        """BUG-4: クラスコード 07/10/13 が 2019年前の旧表記"""
+    def test_BUG4_クラスコード_uses_new_namig(self):
         codes = dict(クラスコード)
-        self.assertEqual(codes["07"], "芝1600万A")  # 旧: 1600万A / 新: 芝3勝A
-        self.assertEqual(codes["10"], "芝1000万A")  # 旧: 1000万A / 新: 芝2勝A
-        self.assertEqual(codes["13"], "芝500万A")  # 旧: 500万A / 新: 芝1勝A
+        self.assertEqual(codes["07"], "芝3勝A")
+        self.assertEqual(codes["10"], "芝2勝A")
+        self.assertEqual(codes["13"], "芝1勝A")
 
     def test_BUG5_KKA_sample_data_JRA成績_is_12_bytes(self):
         """BUG-2追試: 実データ KKA bytes [10:22] は12バイトで4つの成績が入っている"""
