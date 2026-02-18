@@ -25,7 +25,7 @@ SECRET_KEY = '6vau_ej8p8-=7!t7hd!f1x(g=&ahz9gc(7-5jd0eat0ds(4qqd'
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', 'localhost 127.0.0.1').split()
 
 
 # Application definition
@@ -35,6 +35,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'horse.apps.HorseConfig',
     'database.apps.DatabaseConfig',
+    'ml.apps.MLConfig',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -58,7 +59,7 @@ ROOT_URLCONF = 'jrdb.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [os.path.join(BASE_DIR, 'frontend', dist)],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -80,10 +81,11 @@ WSGI_APPLICATION = 'jrdb.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql_psycopg2',
-        'NAME': 'jrdb',
-        'USER': 'admin',
-        'PASSWORD': 'admin',
-        'HOST': 'localhost',
+        'NAME': os.environ.get('DB_NAME', 'jrdb'),
+        'USER': os.environ.get('DB_USER', 'admin'),
+        'PASSWORD': os.environ.get('DB_PASS', 'admin'),
+        'HOST': os.environ.get('DB_HOST', 'localhost'),
+        'PORT': os.environ.get('DB_PORT', '5432'),
     }
 }
 
@@ -125,6 +127,9 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/2.1/howto/static-files/
 
 STATIC_URL = '/static/'
+
+_frontend_assets = os.path.join(BASE_DIR, 'frontend', 'dist', 'assets')
+STATICFILES_DIRS = [_frontend_assets] if os.path.exists(_frontend_assets) else []
 
 REST_FRAMEWORK = {
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',

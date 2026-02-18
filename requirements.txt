@@ -3,8 +3,4 @@ pandas
 numpy
 django-rest-framework
 django-filter
-psycopg2
-
-
-
-#django-database-view
+psycopg2-binaly
