@@ -285,7 +285,7 @@ class Migration(migrations.Migration):
                 ('直線馬場差内', models.CharField(max_length=2)),
                 ('直線馬場差中', models.CharField(max_length=2)),
                 ('直線馬場差外', models.CharField(max_length=2)),
-                ('線馬場差大外', models.CharField(max_length=2)),
+                ('直線馬場差大外', models.CharField(max_length=2)),
                 ('ダ馬場状態コード', models.CharField(max_length=2)),
                 ('ダ馬場状態内', models.CharField(max_length=1)),
                 ('ダ馬場状態中', models.CharField(max_length=1)),
