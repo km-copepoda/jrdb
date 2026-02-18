@@ -1,4 +1,4 @@
-from database.models.PreviousDayInformation import マスタ_騎手データ
+﻿from database.models.PreviousDayInformation import マスタ_騎手データ
 from database.management.import_BaseCommand import Command
 
 class Command(Command):

@@ -70,7 +70,7 @@ export default function App() {
                 <span style={s.headerSub}>-荒れるレース予測用データセット</span>
             </div>
             
-            <FIlterPanel onSearch={handleSearch} loading={loading} />
+            <FilterPanel onSearch={handleSearch} loading={loading} />
 
             {error && <div style={s.error}>{error}</div>}
 

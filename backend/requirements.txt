@@ -4,3 +4,4 @@ numpy
 django-rest-framework
 django-filter
 psycopg2-binary
+requests

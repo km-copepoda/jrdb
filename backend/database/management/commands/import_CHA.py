@@ -1,4 +1,4 @@
-from database.models.PreviousDayInformation import 前日_調教本追切情報
+﻿from database.models.PreviousDayInformation import 前日_調教本追切情報
 from database.management.import_BaseCommand import Command
 
 class Command(Command):

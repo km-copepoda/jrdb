@@ -1,4 +1,4 @@
-from database.models.PreviousDayInformation import 前日_基準三連単情報
+﻿from database.models.PreviousDayInformation import 前日_基準三連単情報
 from database.management.import_BaseCommand import Command
 
 class Command(Command):

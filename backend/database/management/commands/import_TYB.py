@@ -1,4 +1,4 @@
-from database.models.ThatDayInformation import 直前_情報
+﻿from database.models.ThatDayInformation import 直前_情報
 from database.management.import_BaseCommand import Command
 
 class Command(Command):

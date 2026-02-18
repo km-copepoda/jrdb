@@ -1,4 +1,4 @@
-from database.models.PreviousDayInformation import 前日_競走馬拡張
+﻿from database.models.PreviousDayInformation import 前日_競走馬拡張
 from database.management.import_BaseCommand import Command
 
 class Command(Command):

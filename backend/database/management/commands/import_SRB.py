@@ -1,4 +1,4 @@
-from database.models.GradeInformation import 成績_成績レース情報
+﻿from database.models.GradeInformation import 成績_成績レース情報
 from database.management.import_BaseCommand import Command
 
 class Command(Command):

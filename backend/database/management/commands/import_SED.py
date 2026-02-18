@@ -1,9 +1,10 @@
-from database.models.GradeInformation import 成績_成績分析用情報
+﻿from database.models.GradeInformation import 成績_成績分析用情報
 from database.management.import_BaseCommand import Command
 
 class Command(Command):
     help = 'command to import SED(成績_成績分析用情報) files'
     file_format = './database/temp/SED{date}.txt'
+    file_url_format = 'https://example.com/SED{date}.txt'  # 実際の URL に変更してください
     def __init__(self):
         self.__model = 成績_成績分析用情報
         max_lengths = [fields.max_length for fields in self.__model._meta.fields]
