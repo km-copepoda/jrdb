@@ -259,7 +259,7 @@ class 前日_基準三連単情報(models.Model):
             if not value:
                 continue
             decimal_calc = float(Decimal(value) * Decimal("0.1"))
-            odds[f"{id[0]}-{id[1]}-{id[2]}"] = (
+            odds[(id[0], id[1], id[2])] = (
                 decimal_calc if decimal_calc <= 999999 else -1
             )
         return odds
@@ -338,7 +338,7 @@ class 前日_基本馬単情報(models.Model):
             value = self.馬単オッズ[offset : offset + byte].strip()
             if not value:
                 continue
-            odds[f"{id[0]}-{id[1]}"] = float(value) if float(value) < 10000 else -1
+            odds[(id[0], id[1])] = flot(value) if float(value) < 10000 else -1
         return odds
 
 
@@ -413,7 +413,8 @@ class 前日_基準単複連情報(models.Model):
             value = self.単勝オッズ[offset : offset + byte].strip()
             if not value:
                 continue
-            odds[str(id)] = float(value) if float(value) < 1000 else -1
+            odds[id] = float(value) if float(value) < 1000 else -1
+
         return odds
 
     def 複勝オッズ_to_dict(self):
@@ -425,7 +426,8 @@ class 前日_基準単複連情報(models.Model):
             value = self.複勝オッズ[offset : offset + byte].strip()
             if not value:
                 continue
-            odds[str(id)] = float(value) if float(value) < 1000 else -1
+
+            odds[id] = float(value) if float(value) < 1000 else -1
         return odds
 
     def 連勝オッズ_to_dict(self):

@@ -54,9 +54,8 @@ def read_and_write(filename, my_model, colspecs):
 
 
 def read_file(filename, my_model, colspecs):
-    models = list(
-        map(lambda line: getModel(my_model, line, colspecs), open(filename, "r"))
-    )
+    with open(filename, "r", encoding="cp932") as f:
+        models = list(map(lambda line: getModel(my_mopdel, line, colspecs), f))
     create_models = []
     update_models = []
     for m in models:

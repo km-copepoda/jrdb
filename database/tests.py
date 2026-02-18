@@ -1215,7 +1215,7 @@ class TestKnownBugs(unittest.TestCase):
         instance.複勝オッズ = " " * 90
         instance.連勝オッズ = " " * 765
         result = instance.単勝オッズ_to_dict()
-        self.assertAlmostEqual(result["1"], 999.9, places=1)
+        self.assertAlmostEqual(result[1], 999.9, places=1)
 
     def test_三連複オッズ_cab_boundary(self):
         """三連複オッズ 9999.9倍が正しく帰る ( < 10000)"""
