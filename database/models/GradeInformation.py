@@ -114,7 +114,7 @@ class 成績_払戻情報(models.Model):
     三連単払戻5_払戻金 = models.CharField(max_length=9)
     三連単払戻6_馬番組合せ = models.CharField(max_length=6)
     三連単払戻6_払戻金 = models.CharField(max_length=9)
-    予備 = models.CharField(max_length=13)
+    予備 = models.CharField(max_length=11)
 
 
 class 成績_成績レース情報(models.Model):

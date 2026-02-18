@@ -465,6 +465,16 @@ class TestHJCParsing(unittest.TestCase):
         """実データは442バイト"""
         self.assertEqual(len(self.raw), 442)
 
+    def test_colspecs_field_count(self):
+        colspecs = build_colspecs(成績_払戻情報, n_fk=2)
+        self.assertEqual(len(colspecs), len(成績_払戻情報._meta.fields))
+
+    def test_getColumnsDict(self):
+        colspecs = build_colspecs(成績_払戻情報, n_fk=2)
+        line_text = read_first_line("HJC170108.txt").decode("sjis")
+        result = getColumnsDict(成績_払戻情報, replaceSJIS(line_text), colspecs)
+        self.assertIn("場コード", result)
+
 
 # ----------------------------------------------------------------------
 # # 8. SED フィールド解析テスト
@@ -845,6 +855,16 @@ class TestKKAParsing(unittest.TestCase):
         """実データは322バイト"""
         self.assertEqual(len(self.raw), 322)
 
+    def test_colspecs_field_count(self):
+        colspecs = build_colspecs(前日_競走馬拡張, n_fk=3)
+        self.assertEqual(len(colspecs), len(前日_競走馬拡張._meta.fields))
+
+    def test_getColumnsDict(self):
+        colspecs = build_colspecs(前日_競走馬拡張, n_fk=3)
+        line_text = read_first_line("KKA170108.txt").decode("sjis")
+        result = getColumnsDict(前日_競走馬拡張, replaceSJIS(line_text), colspecs)
+        self.assertIn("場コード", result)
+
 
 # ----------------------------------------------------------------------
 # # 20. JOA フィールド解析テスト
@@ -1075,38 +1095,13 @@ class TestModelFieldLengthSums(unittest.TestCase):
         total = self._sum_lengths(前日_詳細情報, n_fk=3)
         self.assertEqual(total, 114)
 
-    # --- BUG-1: HJC ---
-    def test_HJC_BUG1_field_sum_is_too_small(self):
-        """
-        BUG-1: 成績_払戻情報 (HJC) のモデルフィールド長合計は 111 バイトだが
-        実データは 442 バイト。払戻が複数回分定義されていない。
-        BUG-1が修正されれば total == 442 になるはず。
-        """
+    def test_HJC_field_sum(self):
         total = self._sum_lengths(成績_払戻情報, n_fk=2)
-        # 現状バグ: モデルの合計は111バイト (実データは442バイト)
-        self.assertLess(total, 442)
-        self.assertEqual(
-            total, 111, f"BUG-1: HJCモデルの合計が実データ442バイト未満でないと変です"
-        )
-        # 現在の具体的な値を確認 (回帰検出用)
-        self.assertEqual(total, 111)
-        # f'HJCモデルのフィールド合計が111ではありません(現在: {total})'
+        self.assertEqual(total, 442)
 
-    # --- BUG-2: KKA ---
-    def test_KKA_BUG2_field_sum_is_too_small(self):
-        """
-        BUG-2: 前日_競走馬拡張 (KKA) のモデルフィールド長合計は 115 バイトだが
-        実データは 322 バイト。各着順数フィールドが ZZ9x4=12バイトのところ
-        max_length=3。
-        BUG-2が修正されれば total == 322 になるはず。
-        """
+    def test_KKA_field_sum(self):
         total = self._sum_lengths(前日_競走馬拡張, n_fk=3)
-        # 現状バグ: モデルの合計は115バイト (実データ322バイト)
-        self.assertLess(total, 322)
-        # BUG-2が修正されれば total == 115 ではなくなるはず。
-        # 現在の具体的な値を確認 (回帰検出用)
-        self.assertEqual(total, 115)
-        # f'KKAモデルのフィールド合計が115ではありません(現在: {total})'
+        self.assertEqual(total, 322)
 
 
 # ----------------------------------------------------------------------
@@ -1118,20 +1113,18 @@ class TestKnownBugs(unittest.TestCase):
     """発見済みバグの回帰テスト (修正前は失敗して当然)"""
 
     def test_BUG1_HJC_actual_data_length(self):
-        """BUG-1: HJC実データは442バイト (モデルは111バイト分しか読まない)"""
+        """HJC実データは442バイト、モデルも同じ"""
         path = os.path.join(DATA_DIR, "HJC170108.txt")
         if not os.path.exists(path):
             self.skipTest("HJC170108.txt が見つかりません")
         raw = read_first_line("HJC170108.txt")
         self.assertEqual(len(raw), 442)
-        # モデルは111バイト分しかカバーしていない(バグ)
         fields = 成績_払戻情報._meta.fields
         model_bytes = sum(f.max_length for f in fields[2:])  # offset=2
-        self.assertLess(model_bytes, len(raw))
-        # f'BUG-1: HJCモデルが実データより小さい'
+        self.assertEqual(model_bytes, len(raw))
 
     def test_BUG2_KKA_actual_data_length(self):
-        """BUG-2: KKA実データは322バイト (モデルは115バイト分しか読まない)"""
+        """KKA実データは322バイト、モデルも同じ"""
         path = os.path.join(DATA_DIR, "KKA170108.txt")
         if not os.path.exists(path):
             self.skipTest("KKA170108.txt が見つかりません")
@@ -1139,22 +1132,16 @@ class TestKnownBugs(unittest.TestCase):
         self.assertEqual(len(raw), 322)
         fields = 前日_競走馬拡張._meta.fields
         model_bytes = sum(f.max_length for f in fields[3:])  # offset=3
-        self.assertLess(model_bytes, len(raw))
+        self.assertEqual(model_bytes, len(raw))
 
     def test_BUG2_KKA_JRA成績_max_length(self):
-        """BUG-2: KKAのJRA成績フィールドはmax_length=3だが仕様では12バイト"""
-        field = None
-        for f in 前日_競走馬拡張._meta.fields:
-            if f.name == "JRA成績":
-                field = f
-                break
-        self.assertIsNotNone(field, "JRA成績フィールドが見つかりません")
-        # 現在のバグ: max_length=3
-        self.assertEqual(
-            field.max_length,
-            3,
-            f"JRA成績のmax_lengthは修正前は3 (BUG-2: 12であるべき )",
-        )
+        """KKAのJRA成績フィールドは4分割され、それぞれmax_length=3"""
+        field_names = [f.name for f in 前日_競走馬拡張._meta.fields]
+        for suffix in ["_1着", "_2着", "_3着", "_着外"]:
+            name = f"JRA成績{suffix}"
+            self.assertIn(name, field_names, f"{name}フィールドが見つかりません")
+            field = next(f for f in 前日_競走馬拡張._meta.fields if f.name == name)
+            self.assertEqual(field.max_length, 3, f"{name}のmax_lengthが3ではありません")
 
     def test_BUG3_グレードコード_key_is_empty_string(self):
         """BUG-3: グレードコード "6" -> L が未定義で "" キーが使われている"""
