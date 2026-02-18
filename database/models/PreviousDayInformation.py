@@ -766,7 +766,7 @@ class 前日_競走馬拡張(models.Model):
     日 = models.CharField(max_length=1)
     R = models.CharField(max_length=2)
     馬番 = models.CharField(max_length=2)
-    JRA成績 = models.CharField(max_length=3)
+    JRA成績 = models.CharField(max_length=12)
     交流成績 = models.CharField(max_length=3)
     他成績 = models.CharField(max_length=3)
     芝ダ障害別成績 = models.CharField(max_length=3)
