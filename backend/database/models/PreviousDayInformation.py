@@ -24,6 +24,8 @@ class 馬基本情報(models.Model):
     """
     file name is UKC
     """
+    class Meta:
+        db_table = 'database_horse'
 
     def 父馬基本情報(self):
         return 馬基本情報.objects.filter(馬名=self.父馬名).first()
@@ -64,6 +66,8 @@ class 前日_調教師情報(models.Model):
     """
     file name is CZA
     """
+    class Meta:
+        db_table = 'database_trainer'
 
     調教師コード = models.CharField(max_length=5, primary_key=True)
     登録抹消フラグ = models.CharField(max_length=1)
@@ -97,6 +101,8 @@ class マスタ_騎手データ(models.Model):
     """
     file name is KZA
     """
+    class Meta:
+        db_table = 'database_jockey'
 
     騎手コード = models.CharField(max_length=5, primary_key=True)
     登録抹消フラグ = models.CharField(max_length=1)
@@ -132,6 +138,8 @@ class 前日_開催情報(models.Model):
     """
     file name is KAB
     """
+    class Meta:
+        db_table = 'database_kai_info'
 
     開催情報ID = models.CharField(max_length=6, primary_key=True)
     場コード = models.CharField(choices=場コード, max_length=2)
@@ -174,6 +182,7 @@ class 前日_番組情報(models.Model):
     """
 
     class Meta:
+        db_table = 'database_race_info'
         indexes = [
             models.Index(fields=["前日_開催情報"], name="前日_番組情報-前日_開催情報_IDX")
         ]
@@ -229,6 +238,7 @@ class 前日_基準三連単情報(models.Model):
     file name is OV
     """
     class Meta:
+        db_table = 'database_trifecta_odds'
         indexes = [
             models.Index(fields=["前日_開催情報"], name="前日_基準三連単情報-前日_開催情報_IDX"),
             models.Index(fields=["前日_番組情報"], name="前日_基準三連単情報-前日_番組情報_IDX")
@@ -271,6 +281,7 @@ class 前日_基準ワイド情報(models.Model):
     """
 
     class Meta:
+        db_table = 'database_wide_odds'
         indexes = [
             models.Index(fields=["前日_開催情報"], name="前日_基準ワイド情報-前日_開催情報_IDX"),
             models.Index(fields=["前日_番組情報"], name="前日_基準ワイド情報-前日_番組情報_IDX")
@@ -309,6 +320,7 @@ class 前日_基本馬単情報(models.Model):
     file name is OU
     """
     class Meta:
+        db_table = 'database_quinella_odds'
         indexes = [
             models.Index(fields=["前日_開催情報"], name="前日_基本馬単情報-前日_開催情報_IDX"),
             models.Index(fields=["前日_番組情報"], name="前日_基本馬単情報-前日_番組情報_IDX")
@@ -338,7 +350,7 @@ class 前日_基本馬単情報(models.Model):
             value = self.馬単オッズ[offset : offset + byte].strip()
             if not value:
                 continue
-            odds[(id[0], id[1])] = flot(value) if float(value) < 10000 else -1
+            odds[(id[0], id[1])] = float(value) if float(value) < 10000 else -1
         return odds
 
 
@@ -347,6 +359,7 @@ class 前日_基準三連複情報(models.Model):
     file name is OT
     """
     class Meta:
+        db_table = 'database_trio_odds'
         indexes = [
             models.Index(fields=["前日_開催情報"], name="前日_基本三連複情報-前日_開催情報_IDX"),
             models.Index(fields=["前日_番組情報"], name="前日_基本三連複情報-前日_番組情報_IDX")
@@ -385,6 +398,7 @@ class 前日_基準単複連情報(models.Model):
     file name is OZ
     """
     class Meta:
+        db_table = 'database_win_place_odds'
         indexes = [
             models.Index(fields=["前日_開催情報"], name="前日_基本単複連情報-前日_開催情報_IDX"),
             models.Index(fields=["前日_番組情報"], name="前日_基本単複連情報-前日_番組情報_IDX")
@@ -450,6 +464,7 @@ class 前日_競走馬情報(models.Model):
     file name is KYI
     """
     class Meta:
+        db_table = 'database_pre_race_info'
         indexes = [
             models.Index(fields=["前日_開催情報"], name="前日_競走馬情報-前日_開催情報_IDX"),
             models.Index(fields=["前日_番組情報"], name="前日_競走馬情報-前日_番組情報_IDX"),
@@ -662,6 +677,7 @@ class 前日_調教分析情報(models.Model):
     CYB
     """
     class Meta:
+        db_table = 'database_workout_info'
         indexes = [
             models.Index(fields=["前日_開催情報"], name="前日_調教分析情報-前日_開催情報_IDX"),
             models.Index(fields=["前日_番組情報"], name="前日_調教分析情報-前日_番組情報_IDX"),
@@ -705,6 +721,7 @@ class 前日_調教本追切情報(models.Model):
     file name is CHA
     """
     class Meta:
+        db_table = 'database_change_info'
         indexes = [
             models.Index(fields=["前日_開催情報"], name="前日_調教本追切情報-前日_開催情報_IDX"),
             models.Index(fields=["前日_番組情報"], name="前日_調教本追切情報-前日_番組情報_IDX"),
@@ -749,6 +766,7 @@ class 前日_競走馬拡張(models.Model):
     file name is KKA
     """
     class Meta:
+        db_table = 'database_thisday_info'
         indexes = [
             models.Index(fields=["前日_開催情報"], name="前日_競走馬拡張-前日_開催情報_IDX"),
             models.Index(fields=["前日_番組情報"], name="前日_競走馬拡張-前日_番組情報_IDX"),
@@ -872,6 +890,7 @@ class 前日_詳細情報(models.Model):
     file name is JOA
     """
     class Meta:
+        db_table = 'database_prediction_info'
         indexes = [
             models.Index(fields=["前日_開催情報"], name="前日_詳細情報-前日_開催情報_IDX"),
             models.Index(fields=["前日_番組情報"], name="前日_詳細情報-前日_番組情報_IDX"),
