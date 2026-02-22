@@ -1,0 +1,8 @@
+pandas
+numpy
+scipy
+scikit-learn
+lightgbm
+psycopg2-binary
+matplotlib
+optuna

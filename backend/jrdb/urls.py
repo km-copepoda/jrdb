@@ -9,7 +9,7 @@ router.register(r'horses', HorseViewSets)
 
 urlpatterns = [
     path('api/', include(router.urls)),
-    path('api/', include('ml.urls')),
+    path('api/ml/', include('ml.urls')),
     path('admin/', admin.site.urls),
     # React SPA のエンドポイント
     path('', TemplateView.as_view(template_name='index.html')),

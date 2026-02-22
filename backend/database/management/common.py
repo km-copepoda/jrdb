@@ -5,9 +5,12 @@ from datetime import datetime as dt
 from datetime import timedelta
 DECOMP_DIR = './database/temp/'
 
+# CP932 (Windows拡張Shift_JIS) を使用 — JRDB データは CP932 エンコード
+_ENCODING = 'cp932'
+
 def replaceSJIS(record):
     return record\
-        .replace('隆', '隆')\
+        .replace('隆', '隆')\
         .replace('﨑', '崎')\
         .replace('橳', 'ﾇﾃ')\
         .replace('－', '‐')\
@@ -15,7 +18,7 @@ def replaceSJIS(record):
         .replace('Ⅰ', '１')\
         .replace('Ⅱ', '２')\
         .replace('Ⅲ', '３')\
-        .replace('＇', '’')\
+        .replace('＇', "'")\
         .replace('㎏', 'kg')\
         .replace('㌔', 'ｷﾛ')\
         .replace('①', '１')\
@@ -24,7 +27,7 @@ def replaceSJIS(record):
         .replace('④', '４')\
         .replace('⑤', '５')\
         .replace('栁', '柳')\
-        .replace('塚', '塚')\
+        .replace('塚', '塚')\
         .replace('ⅰ', '１')\
         .replace('ⅱ', '２')\
         .replace('ⅲ', '３')\
@@ -56,17 +59,14 @@ def getModel(model, record, colspecs):
     return model(**column_dict)
 
 def getColumnsDict(model, record, colspecs):
-    try:
-        recordEncode = record.encode('sjis')
-    except UnicodeEncodeError as e:
-        raise e
+    recordEncode = record.encode(_ENCODING, errors='replace')
 
     columnDict = {}
     for index, field in enumerate(model._meta.fields):
         begin_index = colspecs[index][0]
         end_index = colspecs[index][1]
         field_name = field.name + ('_id' if type(field) == ForeignKey or type(field) == OneToOneField else '')
-        value = recordEncode[begin_index:end_index].decode('sjis')
+        value = recordEncode[begin_index:end_index].decode(_ENCODING, errors='replace')
         columnDict[field_name] = value if type(field) == TextField else value.strip()
 
     return columnDict
