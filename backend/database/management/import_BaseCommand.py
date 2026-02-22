@@ -11,6 +11,95 @@ from django.db.utils import OperationalError
 import time
 
 
+# JRDBダウンロード設定
+JRDB_BASE_URL = "https://jrdb.com/member/datazip"
+
+# JRDBのデータコード -> ディレクトリ名 / ZIP内ファイルコードのマッピング
+# key: importコマンドが期待ふぁファイルｒ接続辞(ex: "CZA")
+# value: (JRDBディレクトリ名, JRDB zip/ファイル接続辞)
+JRDB_CODE_MAP = {
+    "BAC": ("Bac", "BAC"),
+    "CHA": ("Cha", "CHA"),
+    "CYB": ("Cyb", "CYB"),
+    "CZA": ("Cs", "CSA"),
+    "HJC": ("Hjc", "HJC"),
+    "JOA": ("Jo", "JOA"),
+    "KAB": ("Kab", "KAB"),
+    "KKA": ("Kka", "KKA"),
+    "KYI": ("Kyi", "KYI"),
+    "KZA": ("Ks", "KSA"),
+    "OT": ("Ot", "OT"),
+    "OU": ("Ou", "OU"),
+    "OV": ("Ov", "OV"),
+    "OW": ("Ow", "OW"),
+    "OZ": ("Oz", "OZ"),
+    "SED": ("Sed", "SED"),
+    "SKB": ("Skb", "SKB"),
+    "TYB": ("Tyb", "TYB"),
+    "UKC": ("Ukc", "UKC")
+}
+
+
+def _get_jrdb_auth():
+    """ 環境変数からjrdbの認証情報を取得 """
+    user = os.environ.get("JRDB_USER", "")
+    password = os.environ.get("JRDB_PASS", "")
+    if user and password:
+        return (user, password)
+    return None
+
+
+def _download_from_jrdb(local_code, date_str, dest_path):
+    """ JRDBからデータをダウンロードして保存する """
+    auth = _get_jrdb_auth()
+    if not auth:
+        print("Warning: JRDB_USER / JRDB_PASSが設定されていません。ダウンロードをスキップします。")
+        return False
+    
+    if local_code not in JRDB_CODE_MAP:
+        print(f"Warning: {local_code} のJRDBコードマッピングが定義されていません。ダウンロードをスキップします。")
+        return False
+    
+    jrdb_dir, jrdb_code = JRDB_CODE_MAP[local_code]
+    zip_name = f"{jrdb_code}{date_str}.zip"
+    
+    # JRDBのURL: datazip/{Dir}/{20xx}/{CODE}/{YYMMDD}.zip
+    year_4digit = "20" + date_str[:2]
+    url = f"{JRDB_BASE_URL}/{jrdb_dir}/{year_4digit}/{jrdb_code}/{zip_name}"
+
+    try:
+        print(f"Downloading from {url}...")
+        response = requests.get(url, auth=auth, timeout=30)
+        response.raise_for_status()
+        
+        with zipfile.ZipFile(io.BytesIO(response.content)) as zf:
+            # ZIP内のファイル名はJRDBコード + YYMMDD.txtのはず
+            names = zf.namelist()
+            txt_name = None
+            for name in names:
+                if name.lower().endswith(".txt") and jrdb_code in name:
+                    txt_name = name
+                    break
+            if not txt_name:
+                print(f"Warning: ZIP内にテキストファイルが見つかりませんでした。URL: {url}")
+                return False
+            
+            # 展開して保存
+            data = zf.read(txt_name)
+            with open(dest_path, "wb") as f:
+                f.write(data)
+            print(f"Saved to {dest_path}")
+            return True
+    except requests.exception.HTTPError as e:
+        if e.response is not None and e.response.status_code == 404:
+            # 開催日でない日はファイルが存在しないため404になることがある。正常系
+            pass
+        else:
+            print(f"Warning: Failed to download {url}: {e}")
+    except Exception as e:
+        print(f"Warning: Failed to download {url}: {e}")
+        return False
+
 class Command(BaseCommand):
     help = "This command can not use!"
 
@@ -32,8 +121,24 @@ class Command(BaseCommand):
             action="store_true",
             help="Force download even if local file exists",
         )
+        parser.add_argument(
+            "--no-download",
+            action="store_true",
+            help="Skip downloading, only import local files",
+        )
+    
+    def _get_jrdb_code(self):
+        """ JRDB データコードを取得(jrdb_code属性 or file_formatから推定) """
+        if hasattr(self, "jrdb_code"):
+            return self.jrdb_code
+        
+        # file_formatから推定
+        basename = os.path.basename(self.file_format)
+        code = basename.split("{")[0]
+        return code
 
     def handle(self, *args, **options):
+        no_download = options.get("no_download", False)
         force_fetch = options.get("force_fetch", False)
         begin_date = (
             options["find_begin_date"]
@@ -47,26 +152,17 @@ class Command(BaseCommand):
         start_time = time.time()
         os.makedirs("./database/temp", exist_ok=True)
         
+        jrdb_code = self._get_jrdb_code()
+
         # ファイルをダウンロード（必要な場合）
         for file_date in date_range(begin_date, end_date):
-            filename = self.file_format.format(date=file_date.strftime("%y%m%d"))
+            date_str = file_date.strftime("%y%m%d")
+            filename = self.file_format.format(date=date_str)
             file_exists = os.path.isfile(filename)
             
             # ローカルにない または 強制ダウンロード指定の場合、ダウンロードを試みる
-            if (not file_exists or force_fetch) and hasattr(self, 'file_url_format'):
-                url = self.file_url_format.format(date=file_date.strftime("%y%m%d"))
-                try:
-                    print(f"Downloading from {url}...")
-                    response = requests.get(url, timeout=30)
-                    response.raise_for_status()
-                    with open(filename, 'w', encoding='cp932') as f:
-                        f.write(response.text)
-                    print(f"Saved to {filename}")
-                except Exception as e:
-                    print(f"Warning: Failed to download {url}: {e}")
-                    if not file_exists:
-                        # ダウンロード失敗で、ローカルファイルもない場合はスキップ
-                        continue
+            if not no_download and (force_fetch or not file_exists):
+                _download_from_jrdb(jrdb_code, date_str, filename)
         
         # ローカルファイルから読み込み
         for file_date in date_range(begin_date, end_date):
@@ -101,10 +197,10 @@ def read_file(filename, my_model, colspecs):
 
 
 def write_db(create_models, update_models, my_model):
-    with transaction.atomic():
-        try:
+    try:
+        with transaction.atomic():
             my_model.objects.bulk_create(create_models)
             for m in update_models:
                 m.save()
-        except Exception as e:
-            print(e)
+    except Exception as e:
+        print(e)

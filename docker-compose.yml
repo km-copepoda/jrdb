@@ -22,6 +22,11 @@ services:
       DB_USER: admin
       DB_PASS: admin
       ALLOWED_HOSTS: "* localhost 127.0.0.1 backend"
+      IMPORT_BEGIN: "20210101"
+      IMPORT_END: "20251231"
+      SKIP_DOWNLOAD: "1"
+      JRDB_USER: "16120005"
+      JRDB_PASS: "38057460"
     depends_on:
       - db
 
