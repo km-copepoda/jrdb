@@ -12,28 +12,77 @@
 4. LightGBM 7-seed ensemble で学習
 """
 
-from horse_model import build_horse_features, prepare
+import pickle
+import pandas as pd
+from horse_model import build_horse_features, prepare, FEATURE_COLS
 from upset_ef import train, predict_ensemble
 
 
 def main():
-    # TODO: 特徴量生成
+    # Step 1: 特徴量生成
     print("Step 1: 特徴量生成...")
-    # df = build_horse_features()
+    df = build_horse_features()
 
-    # TODO: 前処理
+    # Step 2: 前処理
     print("Step 2: 前処理...")
-    # df = prepare(df)
+    df, features, label_encoders = prepare(df)
 
-    # TODO: ローリング学習・予測
+    # Step 3: ローリング学習・予測
     print("Step 3: ローリング学習・予測...")
-    # for year in [2024, 2025, 2026]:
-    #     train_df = df[df['year'] < year]
-    #     test_df = df[df['year'] == year]
-    #     models = train(X_train, y_train, X_val, y_val)
-    #     preds = predict_ensemble(models, X_test)
+    all_test = []
+    all_models = {}
 
-    print("完了")
+    for year in [2024, 2025, 2026]:
+        train_mask = df["year"] < year
+        test_mask = df["year"] == year
+
+        if test_mask.sum() == 0:
+            print(f"  {year}: テストデータなし → スキップ")
+            continue
+
+        train_df = df[train_mask]
+        test_df = df[test_mask].copy()
+
+        # 直近1年をバリデーション
+        val_year = year - 1
+        val_mask = train_df["year"] == val_year
+        if val_mask.sum() == 0:
+            val_mask = train_df["year"] == train_df["year"].max()
+
+        X_train = train_df[~val_mask][features]
+        y_train = train_df[~val_mask]["win"]
+        X_val = train_df[val_mask][features]
+        y_val = train_df[val_mask]["win"]
+        X_test = test_df[features]
+
+        print(f"\n  {year}: train={len(X_train)}, val={len(X_val)}, test={len(X_test)}")
+
+        models = train(X_train, y_train, X_val, y_val)
+        test_df["pred"] = predict_ensemble(models, X_test)
+        all_test.append(test_df)
+        all_models[year] = models
+
+        print(f"  {year}: 学習完了 (7-seed ensemble)")
+
+    # 結果保存
+    if all_test:
+        combined = pd.concat(all_test, ignore_index=True)
+        combined.to_csv("predictions.csv", index=False)
+        print(f"\n予測結果を predictions.csv に保存 ({len(combined)} rows)")
+
+        # モデル保存
+        with open("models.pkl", "wb") as f:
+            pickle.dump(all_models, f)
+        print("モデルを models.pkl に保存")
+
+        # ラベルエンコーダー保存
+        with open("label_encoders.pkl", "wb") as f:
+            pickle.dump(label_encoders, f)
+        print("ラベルエンコーダーを label_encoders.pkl に保存")
+    else:
+        print("\nテストデータがありません。")
+
+    print("\n完了")
 
 
 if __name__ == "__main__":
