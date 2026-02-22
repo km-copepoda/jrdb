@@ -49,3 +49,4 @@ python manage.py group_import_ThatDayInformation $BEGIN_OPT $END_OPT || echo "Wa
 
 echo "Starting server..."
 python manage.py runserver 0.0.0.0:8000
+
