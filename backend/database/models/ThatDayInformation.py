@@ -8,6 +8,8 @@ class 直前_情報(models.Model):
     """
     file name is TYB
     """
+    class Meta:
+        db_table = 'database_tyb_info'
 
     開催情報ID = models.CharField(max_length=6, db_index=True)
     番組情報ID = models.CharField(max_length=8, db_index=True)

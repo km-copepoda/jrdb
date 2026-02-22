@@ -90,7 +90,7 @@ def _has_results_subquery():
 
 class RaceListView(View):
     """
-    GET /api/ml/races/
+    GET /api/races/
     クエリパラメータ：
         date_from / date_to  - 年月日(YYYYMMDD)
         venue                - 場コード (01-10)
@@ -168,7 +168,7 @@ class RaceListView(View):
 
 class FieldListView(View):
     """
-    GET /api/ml/fields/
+    GET /api/fields/
     MLに使える選択可能フィールド一覧をモデル別に返す
     """
 
@@ -187,7 +187,7 @@ class _EchoBuffer:
 
 class CsvDownloadView(View):
     """
-    GET /api/ml/csv/?races=id1,id2&fields=SED.IDM,KYI.騎手指数,...
+    GET /api/csv/download/?races=id1,id2&fields=SED.IDM,KYI.騎手指数,...
     CSV 1行 = 馬1頭分 StreamingHttpResponseで大量データに対応
     """
 
@@ -255,3 +255,16 @@ class CsvDownloadView(View):
         response = StreamingHttpResponse(generate_csv(), content_type='text/csv')
         response['Content-Disposition'] = 'attachment; filename="jrdb_ml_data.csv"'
         return response
+
+
+class PredictView(View):
+    """
+    POST /api/ml/predict/
+    予測実行エンドポイント（未実装スタブ）
+    """
+
+    def post(self, request):
+        return JsonResponse(
+            {'error': '予測機能は未実装です'},
+            status=501,
+        )

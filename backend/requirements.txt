@@ -1,7 +1,14 @@
 django
 pandas
 numpy
-django-rest-framework
-django-filter
 psycopg2-binary
+djangorestframework
+django-filter
 requests
+beautifulsoup4
+lxml
+scikit-learn
+lightgbm
+optuna
+matplotlib
+seaborn

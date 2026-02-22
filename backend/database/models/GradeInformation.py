@@ -28,6 +28,7 @@ class 成績_払戻情報(models.Model):
     file name is HJC
     """
     class Meta:
+        db_table = 'database_result_huc'
         indexes = [
             models.Index(fields=["前日_開催情報"], name="成績_払戻情報-前日_開催情報_IDX"),
             models.Index(fields=["前日_番組情報"], name="成績_払戻情報-前日_番組情報_IDX"),
@@ -122,6 +123,7 @@ class 成績_成績レース情報(models.Model):
     file name is SRB
     """
     class Meta:
+        db_table = 'database_result_srb'
         indexes = [
             models.Index(fields=["前日_開催情報"], name="成績_成績レース情報-前日_開催情報_IDX"),
             models.Index(fields=["前日_番組情報"], name="成績_成績レース情報-前日_番組情報_IDX"),
@@ -157,6 +159,7 @@ class 成績_成績分析用拡張情報(models.Model):
     file name is SKB
     """
     class Meta:
+        db_table = 'database_result_skb'
         indexes = [
             models.Index(fields=["前日_開催情報"], name="成績_成績分析用拡張情報-前日_開催情報_IDX"),
             models.Index(fields=["前日_番組情報"], name="成績_成績分析用拡張情報-前日_番組情報_IDX"),
@@ -202,6 +205,7 @@ class 成績_成績分析用情報(models.Model):
     file name is SED
     """
     class Meta:
+        db_table = 'database_result_sed'
         indexes = [
             models.Index(fields=["前日_開催情報"], name="成績_成績分析用情報-前日_開催情報_IDX"),
             models.Index(fields=["前日_番組情報"], name="成績_成績分析用情報-前日_番組情報_IDX"),
