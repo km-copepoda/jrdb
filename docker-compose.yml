@@ -1,45 +1,11 @@
+version: '3'
 services:
   db:
-    image: postgres:15
+    image: postgres:latest
     ports:
-      - "5432:5432"
+      - 5432:5432
     volumes:
-      - db_data:/var/lib/postgresql/data
+    - ../jrdb_DB:/var/lib/pgsql
     environment:
       POSTGRES_USER: admin
       POSTGRES_PASSWORD: admin
-      POSTGRES_DB: jrdb
-
-  backend:
-    build: ./backend
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./backend:/app
-    environment:
-      DB_HOST: db
-      DB_NAME: jrdb
-      DB_USER: admin
-      DB_PASS: admin
-      ALLOWED_HOSTS: "* localhost 127.0.0.1 backend"
-      IMPORT_START: "20180101"
-      IMPORT_END: "20241231"
-      JRDB_USER: ""
-      JRDB_PASS: ""
-    depends_on:
-      - db
-
-  frontend:
-    build: ./frontend
-    ports:
-      - "5173:5173"
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-    environment:
-      API_URL: "http://backend:8000"
-    depends_on:
-      - backend
-
-volumes:
-  db_data:
