@@ -38,5 +38,8 @@ KYI_NUMERIC_FIELDS = [
     "激走指数", "万券指数",
 ]
 
+# 特徴量グループ名
+FEATURE_GROUP_NAMES = ["FG1", "FG2", "FG3", "FG4", "FG5", "FG6"]
+
 # 出力ディレクトリ
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "output")

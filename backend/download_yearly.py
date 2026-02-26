@@ -33,7 +33,7 @@ DATA_TYPES = [
     ("Ukc", "UKC", "UKC"),
 ]
 
-YEARS = [2021, 2022, 2023, 2024, 2025]
+YEARS = [2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025]
 
 
 def download_and_extract(jrdb_dir, jrdb_code, local_code, year):

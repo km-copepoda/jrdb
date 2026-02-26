@@ -61,11 +61,36 @@ def _parse_record(record_str):
     return np.nan, np.nan, 0
 
 
-def build_horse_features() -> pd.DataFrame:
-    """馬単位の特徴量テーブルを構築 (1行 = 1出走馬)"""
+def build_horse_features(feature_groups=None, return_raw=False) -> pd.DataFrame:
+    """馬単位の特徴量テーブルを構築 (1行 = 1出走馬)
+
+    Args:
+        feature_groups: 有効にするFGリスト (例: ["FG1","FG3"])。
+                        None の場合はベースライン（後方互換）。
+        return_raw: True の場合、ID列・着順・人気・印列を保持して返す。
+                    ファクター評価等で生データが必要な場合に使用。
+    """
+    # feature_groups が指定された場合のみインポート
+    fg_defs = {}
+    if feature_groups:
+        from feature_groups import FEATURE_GROUPS as _FG_REGISTRY
+        for fg_name in feature_groups:
+            if fg_name in _FG_REGISTRY:
+                fg_defs[fg_name] = _FG_REGISTRY[fg_name]
+
     conn = psycopg2.connect(**DB_CONFIG)
     try:
-        print("馬単位データを構築中...")
+        print(f"馬単位データを構築中... (FG: {list(fg_defs.keys()) if fg_defs else 'baseline'})")
+
+        # --- FG用の追加SQL列を準備 ---
+        extra_bac_sql = ""
+        extra_tyb_cols = []
+        extra_kka_cols = []
+        for fg_name, fg_def in fg_defs.items():
+            for alias, dbcol in fg_def.get("bac_cols", []):
+                extra_bac_sql += f',\n            bac."{dbcol}" AS {alias}'
+            extra_tyb_cols.extend(fg_def.get("tyb_cols", []))
+            extra_kka_cols.extend(fg_def.get("kka_cols", []))
 
         # --- ベーステーブル: KYI + SED (着順結果) ---
         top3_sql = ", ".join(f"'{v}'" for v in TOP3_VALUES)
@@ -159,7 +184,7 @@ def build_horse_features() -> pd.DataFrame:
             kab."芝馬場差"              AS turf_bias,
             kab."ダ馬場差"              AS dirt_bias,
             kab."連続何日目"            AS consecutive_day
-
+            {extra_bac_sql}
         FROM "{T_KYI}" kyi
         JOIN "{T_BAC}" bac ON kyi."前日_番組情報_id" = bac."番組情報ID"
         JOIN "{T_KAB}" kab ON bac."前日_開催情報_id" = kab."開催情報ID"
@@ -224,6 +249,9 @@ def build_horse_features() -> pd.DataFrame:
 
         # --- TYB 直前情報 ---
         print("  TYB直前情報をJOIN中...")
+        extra_tyb_sql = ""
+        for alias, dbcol in extra_tyb_cols:
+            extra_tyb_sql += f',\n            tyb."{dbcol}" AS {alias}'
         sql_tyb = f"""
         SELECT
             tyb."前日_競走馬情報_id"  AS horse_race_id,
@@ -232,6 +260,7 @@ def build_horse_features() -> pd.DataFrame:
             tyb."総合指数"            AS tyb_composite,
             tyb."単勝オッズ"          AS day_win_odds,
             tyb."直前総合印"          AS tyb_mark
+            {extra_tyb_sql}
         FROM "{T_TYB}" tyb
         """
         tyb = pd.read_sql(sql_tyb, conn)
@@ -274,6 +303,9 @@ def build_horse_features() -> pd.DataFrame:
 
         # --- KKA 競走馬拡張 ---
         print("  KKA拡張情報をJOIN中...")
+        extra_kka_sql = ""
+        for alias, dbcol in extra_kka_cols:
+            extra_kka_sql += f',\n            kka."{dbcol}" AS "{alias}"'
         sql_kka = f"""
         SELECT
             kka."前日_競走馬情報_id"  AS horse_race_id,
@@ -289,6 +321,7 @@ def build_horse_features() -> pd.DataFrame:
             kka."父馬産駒ダ連対率"    AS sire_dirt_rate,
             kka."母父馬産駒芝連対率"  AS bms_turf_rate,
             kka."母父馬産駒ダ連対率"  AS bms_dirt_rate
+            {extra_kka_sql}
         FROM "{T_KKA}" kka
         """
         kka = pd.read_sql(sql_kka, conn)
@@ -311,9 +344,13 @@ def build_horse_features() -> pd.DataFrame:
              kka["td_3rd"] + kka["td_out"]),
             np.nan,
         )
-        kka_use = kka[["horse_race_id", "surface_pr", "td_pr",
+        kka_use_cols = ["horse_race_id", "surface_pr", "td_pr",
                         "sire_turf_rate", "sire_dirt_rate",
-                        "bms_turf_rate", "bms_dirt_rate"]]
+                        "bms_turf_rate", "bms_dirt_rate"]
+        # FG用のKKA raw列も含める
+        kka_use_cols += [c for c in kka.columns
+                         if c.startswith("fg") and c not in kka_use_cols]
+        kka_use = kka[kka_use_cols]
         df = df.merge(kka_use, on="horse_race_id", how="left")
 
         # --- 騎手・調教師 ---
@@ -469,11 +506,41 @@ def build_horse_features() -> pd.DataFrame:
         df["win"] = (df["finish_pos"] == 1).astype(int)
         df["top2_finish"] = (df["finish_pos"] <= 2).astype(int)
 
+        # --- FG特徴量の導出 ---
+        if fg_defs:
+            print("  FG特徴量を導出中...")
+            # df にはKKA/TYB/BACのfg*_ raw列が既にmerge済み
+            # 各FGのderive_fnに df自身をrawとして渡す
+            derived_cols = set()
+            for fg_name, fg_def in fg_defs.items():
+                derive_fn = fg_def["derive_fn"]
+                fg_features = derive_fn(df, df)
+                for col in fg_features.columns:
+                    df[col] = fg_features[col].values
+                    derived_cols.add(col)
+                print(f"    {fg_name}: {len(fg_features.columns)} 特徴量追加")
+
+            # SQL由来のraw列のうち、derive結果に含まれないものを削除
+            raw_alias_cols = set()
+            for fg_def in fg_defs.values():
+                for alias, _ in fg_def.get("kka_cols", []):
+                    raw_alias_cols.add(alias)
+                for alias, _ in fg_def.get("tyb_cols", []):
+                    raw_alias_cols.add(alias)
+                for alias, _ in fg_def.get("bac_cols", []):
+                    raw_alias_cols.add(alias)
+            drop_raw = [c for c in raw_alias_cols
+                        if c in df.columns and c not in derived_cols]
+            if drop_raw:
+                df = df.drop(columns=drop_raw)
+            df = df.copy()
+
         # カテゴリ列のクリーンアップ
-        drop_cols = ["horse_race_id", "horse_id", "finish_pos", "final_pop",
-                     "stable_rank", "farm_rank", "heavy_apt"] + mark_cols
-        df = df.drop(columns=[c for c in drop_cols if c in df.columns],
-                     errors="ignore")
+        if not return_raw:
+            drop_cols = ["horse_race_id", "horse_id", "finish_pos", "final_pop",
+                         "stable_rank", "farm_rank", "heavy_apt"] + mark_cols
+            df = df.drop(columns=[c for c in drop_cols if c in df.columns],
+                         errors="ignore")
 
         print(f"  最終テーブル: {df.shape[0]} 行 x {df.shape[1]} 列")
         return df

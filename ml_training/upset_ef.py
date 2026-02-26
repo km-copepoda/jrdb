@@ -9,25 +9,79 @@ F: fav1,2,3が1,2着にこない → 馬単ex3
    馬モデル: P(top2) = P(着順<=2)
    p_product = (1-p_fav1)*(1-p_fav2)*(1-p_fav3)
 
-Rolling:
-  2018-2022→2023, 2018-2023→2024, 2018-2024→2025, 2018-2025→2026
+Rolling (7年スライディングウィンドウ):
+  2015-2021→2022, 2016-2022→2023, 2017-2023→2024, 2018-2024→2025, 2019-2025→2026
 """
+import os
 import sys
 import time
+import pickle
 import warnings
 import numpy as np
 import pandas as pd
 import psycopg2
 import lightgbm as lgb
+import catboost as cb
 from math import comb, perm
+from scipy.stats import entropy as _entropy
 from sklearn.metrics import roc_auc_score
+from sklearn.isotonic import IsotonicRegression
+from sklearn.linear_model import LogisticRegressionCV
 from horse_model import build_horse_features, _to_numeric, _prepare
 from config import DB_CONFIG, T_BAC, T_HJC, T_SED, T_KYI, T_TYB
+from evaluate_factors import _load_extra_prev_cols, compute_factors
+from factor_definitions import FACTOR_CATALOG, ALL_FACTOR_NAMES
+
+# 最適特徴量グループ (実験結果: FG2+FG3+FG4+FG5+FG6)
+# FG2: ペース/季節/枠, FG3: 騎手専門性, FG4: 馬体重,
+# FG5: 重量種別+ローテ, FG6: コンボ+レース集約
+BEST_FEATURE_GROUPS = ["FG2", "FG3", "FG4", "FG5", "FG6"]
 
 warnings.filterwarnings("ignore")
 
 # 全ターゲット列 + ID列 (feat_colsから除外)
 DROP = ["race_id", "top3_finish", "win", "top2_finish", "date"]
+
+N_ENS_CB = 3
+BLEND_WEIGHT_LGB = 0.55
+
+# L1-onlyモード: LGB/CBをスキップし、オッズ由来確率+factor_scoreのみ使用
+L1_ONLY = False
+
+# return_raw=True で残るが ML特徴量としては不要な列
+_RAW_DROP = [
+    "horse_race_id", "horse_id", "finish_pos", "final_pop",
+    "stable_rank", "farm_rank", "heavy_apt", "horse_no",
+    "mark_overall", "mark_idm", "mark_info", "mark_jockey",
+    "mark_stable", "mark_training", "mark_upset", "mark_longshot",
+    "prev1_furi", "prev1_mae_furi", "prev1_naka_furi",
+    "prev1_ato_furi", "prev1_race_eval", "prev1_soten",
+    "prev1_mae3f", "prev1_ato3f", "prev1_kinryo",
+    "prev1_distance", "prev1_surface", "prev1_grade",
+    "prev1_weight", "prev1_weight_change", "prev2_furi",
+]
+
+def _fit_l1_weights(factor_binary_store, factor_cols, l1_yrs):
+    """L1正則化ロジスティック回帰でファクター重みをフォールド内推定"""
+    mask = factor_binary_store["date"].str[:4].isin(l1_yrs)
+    l1_df = factor_binary_store[mask]
+    y = l1_df["upset_horse"].values
+    X = l1_df[factor_cols].fillna(0).astype(float)
+
+    valid = ~np.isnan(y)
+    X, y = X[valid], y[valid]
+
+    if len(y) < 100 or y.sum() < 10:
+        return {}
+
+    model = LogisticRegressionCV(
+        Cs=20, cv=5, penalty='l1', solver='saga',
+        scoring='roc_auc', max_iter=5000, random_state=42,
+    )
+    model.fit(X, y)
+    return {fc: w for fc, w in zip(factor_cols, model.coef_[0])
+            if abs(w) > 1e-6}
+
 
 TUNED_PARAMS = {
     "learning_rate": 0.078,
@@ -65,6 +119,41 @@ def _train_lgb(X_tr, y_tr, X_te, y_te, n=7):
         )
         preds.append(m.predict(X_te))
     return np.median(preds, axis=0)
+
+
+def _train_cb(X_tr, y_tr, X_te, y_te, cat_indices, n=N_ENS_CB):
+    """CatBoost multi-seed ensemble"""
+    neg = int((y_tr == 0).sum())
+    pos = int((y_tr == 1).sum())
+    spw = neg / max(pos, 1)
+    X_tr_cb = X_tr.copy()
+    X_te_cb = X_te.copy()
+    for idx in cat_indices:
+        col = X_tr_cb.columns[idx]
+        X_tr_cb[col] = X_tr_cb[col].astype(str).fillna("__NA__")
+        X_te_cb[col] = X_te_cb[col].astype(str).fillna("__NA__")
+    preds = []
+    for i in range(n):
+        model = cb.CatBoostClassifier(
+            iterations=1000, learning_rate=0.05, depth=6,
+            l2_leaf_reg=3.0, random_seed=42 + i * 11,
+            scale_pos_weight=spw, eval_metric="AUC",
+            early_stopping_rounds=50, verbose=0,
+            cat_features=cat_indices,
+        )
+        model.fit(X_tr_cb, y_tr, eval_set=(X_te_cb, y_te))
+        preds.append(model.predict_proba(X_te_cb)[:, 1])
+    return np.median(preds, axis=0)
+
+
+def _blend_and_calibrate(lgb_cal, cb_cal, y_cal,
+                         lgb_test, cb_test):
+    """LGB+CBブレンド → isotonic calibration"""
+    cal_raw = BLEND_WEIGHT_LGB * lgb_cal + (1 - BLEND_WEIGHT_LGB) * cb_cal
+    test_raw = BLEND_WEIGHT_LGB * lgb_test + (1 - BLEND_WEIGHT_LGB) * cb_test
+    iso = IsotonicRegression(y_min=0.01, y_max=0.99, out_of_bounds="clip")
+    iso.fit(cal_raw, y_cal)
+    return iso.predict(test_raw)
 
 
 # ---------------------------------------------------------------
@@ -189,7 +278,8 @@ def _get_fav_umabans_top3(race_ids):
 # ---------------------------------------------------------------
 # レース特徴量構築 (E/F共通)
 # ---------------------------------------------------------------
-def _build_race_ef(te_df, horse_pred, X_te, sed_pop, def_name):
+def _build_race_ef(te_df, horse_pred, X_te, sed_pop, def_name,
+                   factor_scores=None):
     """
     E: actual_upset = fav1,2,3全員が1着にこない
     F: actual_upset = fav1,2,3全員が2着以内にこない
@@ -200,6 +290,8 @@ def _build_race_ef(te_df, horse_pred, X_te, sed_pop, def_name):
     })
     if "day_win_odds" in X_te.columns:
         pred_df["day_win_odds"] = X_te["day_win_odds"].values
+    if factor_scores is not None:
+        pred_df["factor_score"] = factor_scores
 
     results = []
     for rid, grp in pred_df.groupby("race_id"):
@@ -277,8 +369,81 @@ def _build_race_ef(te_df, horse_pred, X_te, sed_pop, def_name):
             row["p_rest_max"] = rp.max()
             row["p_rest_mean"] = rp.mean()
         else:
+            rp = np.array([])
             row["p_rest_max"] = 0
             row["p_rest_mean"] = 0
+
+        # ---- ファクタースコア集約 (レースレベル) ----
+        if "factor_score" in grp.columns:
+            rest_fs = (rest["factor_score"].values
+                       if len(rest) > 0 else np.array([0.0]))
+            fav_fs = np.array([
+                fav1.get("factor_score", 0),
+                fav2.get("factor_score", 0),
+                fav3.get("factor_score", 0),
+            ])
+            row["fs_rest_max"] = rest_fs.max()
+            row["fs_rest_mean"] = rest_fs.mean()
+            row["fs_fav_mean"] = fav_fs.mean()
+            row["fs_gap"] = rest_fs.max() - fav_fs.mean()
+            row["fs_rest_top2_sum"] = sum(
+                sorted(rest_fs, reverse=True)[:2])
+            row["fs_rest_positive_n"] = int((rest_fs > 0).sum())
+            row["fs_rest_strong_n"] = int(
+                (rest_fs > 0.3).sum())
+
+        # ---- リッチ特徴量 (horse_model.py由来) ----
+        fav_p = np.array([p1, p2, p3])
+        all_p = grp["p_target"].values
+
+        # 人気馬統計
+        row["h_fav_mean"] = fav_p.mean()
+        row["h_fav_min"] = fav_p.min()
+        row["h_fav_max"] = fav_p.max()
+        row["h_fav_std"] = fav_p.std()
+        safe_fav = np.clip(fav_p, 0.01, 0.99)
+        row["h_fav_logodds_sum"] = np.sum(
+            np.log(safe_fav / (1 - safe_fav)))
+        row["h_fav12_gap"] = p1 - p2
+        row["h_fav_weak_count"] = int((fav_p < 0.5).sum())
+        row["h_fav_very_weak"] = int((fav_p < 0.35).sum())
+
+        # 非人気馬統計
+        if len(rp) > 0:
+            row["h_rest_std"] = rp.std() if len(rp) > 1 else 0
+            row["h_rest_beat_fav3"] = int((rp > p3).sum())
+            top2_rest = sorted(rp, reverse=True)[:2]
+            row["h_rest_top2_sum"] = sum(top2_rest)
+            row["h_rest_above_40"] = int((rp > 0.4).sum())
+            row["h_rest_above_50"] = int((rp > 0.5).sum())
+        else:
+            row["h_rest_std"] = 0
+            row["h_rest_beat_fav3"] = 0
+            row["h_rest_top2_sum"] = 0
+            row["h_rest_above_40"] = 0
+            row["h_rest_above_50"] = 0
+
+        # ギャップ・全体統計
+        row["h_gap"] = fav_p.mean() - (rp.mean() if len(rp) > 0 else 0)
+        row["h_all_std"] = all_p.std()
+        row["h_all_range"] = all_p.max() - all_p.min()
+
+        # エントロピー（混戦度）
+        safe_all = np.clip(all_p, 0.001, 0.999)
+        prob_norm = safe_all / safe_all.sum()
+        row["h_pred_entropy"] = _entropy(prob_norm)
+
+        # Gini不均衡度
+        sorted_p = np.sort(all_p)
+        n_all = len(sorted_p)
+        if n_all > 1 and sorted_p.sum() > 0:
+            idx = np.arange(1, n_all + 1)
+            row["h_pred_gini"] = (
+                (2.0 * np.sum(idx * sorted_p)
+                 / (n_all * sorted_p.sum()))
+                - (n_all + 1.0) / n_all)
+        else:
+            row["h_pred_gini"] = 0
 
         results.append(row)
 
@@ -395,6 +560,28 @@ def fast_roi(race_econ, selected_rids):
     return total_ret / total_cost * 100
 
 
+def fast_roi_detail(race_econ, selected_rids):
+    """ROI + 的中数 + 投資/払戻 詳細"""
+    total_cost = 0
+    total_ret = 0
+    n_hit = 0
+    for rid in selected_rids:
+        if rid in race_econ:
+            c, p = race_econ[rid]
+            total_cost += c
+            total_ret += p
+            if p > 0:
+                n_hit += 1
+    n_races = len(selected_rids)
+    roi = total_ret / total_cost * 100 if total_cost > 0 else 0
+    return {
+        "roi": roi, "n_races": n_races, "n_hit": n_hit,
+        "hit_rate": n_hit / n_races if n_races > 0 else 0,
+        "total_cost": total_cost, "total_ret": total_ret,
+        "profit": total_ret - total_cost,
+    }
+
+
 # ---------------------------------------------------------------
 # スコアリング
 # ---------------------------------------------------------------
@@ -405,7 +592,7 @@ def compute_scores(rf):
     fi1 = rf["fav1_implied"].values
     nh = rf["n_horses"].values.astype(float)
     prm = rf["p_rest_max"].values
-    return {
+    scores = {
         "naive": p,
         "odds_naive": po,
         "blend50": 0.5 * p + 0.5 * po,
@@ -419,6 +606,35 @@ def compute_scores(rf):
             p * fis
             / np.maximum((nh - 3) * (nh - 4) / 2, 1) * 100),
     }
+    # Stage 2 スコア
+    if "stage2_score" in rf.columns:
+        s2 = rf["stage2_score"].values
+        scores["s2_pure"] = s2
+        scores["s2_blend50"] = 0.5 * s2 + 0.5 * p
+        scores["s2_blend70"] = 0.7 * s2 + 0.3 * p
+        scores["s2_x_odds"] = s2 * fis
+        scores["s2_x_rest"] = s2 * prm
+    # ファクター系スコア
+    if "fs_rest_max" in rf.columns:
+        fs_rm = rf["fs_rest_max"].values
+        fs_gap = rf["fs_gap"].values
+        scores["factor_pure"] = fs_rm
+        scores["p_x_factor"] = p * np.maximum(fs_rm, 0.01)
+        scores["factor_gap"] = fs_gap
+        scores["combo_factor"] = p * fis * np.maximum(fs_rm, 0.01)
+    if "stage2_score" in rf.columns and "fs_rest_max" in rf.columns:
+        s2 = rf["stage2_score"].values
+        scores["s2_x_factor"] = s2 * np.maximum(fs_rm, 0.01)
+        scores["s2_blend_factor"] = (
+            0.5 * s2 + 0.3 * p + 0.2 * fs_rm)
+    # リッチ特徴量スコア
+    if "h_pred_entropy" in rf.columns:
+        ent = rf["h_pred_entropy"].values
+        scores["entropy_w"] = p * ent
+    if "h_fav_logodds_sum" in rf.columns:
+        logodds = rf["h_fav_logodds_sum"].values
+        scores["logodds_inv"] = p * np.maximum(-logodds, 0)
+    return scores
 
 
 # ---------------------------------------------------------------
@@ -474,13 +690,16 @@ def grid_search(race_data, year_scores, econ, test_years,
                     for tname in ticket_names:
                         if tname not in econ[test_years[0]]:
                             continue
-                        rois, ns = [], []
+                        rois, ns, hits = [], [], []
                         for yr in test_years:
-                            roi = fast_roi(
+                            d = fast_roi_detail(
                                 econ[yr][tname], year_sels[yr])
-                            rois.append(roi)
-                            ns.append(len(year_sels[yr]))
+                            rois.append(d["roi"])
+                            ns.append(d["n_races"])
+                            hits.append(d["n_hit"])
 
+                        total_hit = sum(hits)
+                        total_n = sum(ns)
                         entry = {
                             "score": sn, "type": f"top{pct}%",
                             "ff": ff, "fav1_o": fo,
@@ -488,10 +707,14 @@ def grid_search(race_data, year_scores, econ, test_years,
                             "avg_roi": np.mean(rois),
                             "min_roi": min(rois),
                             "avg_n": np.mean(ns),
+                            "avg_hit_rate": (
+                                total_hit / total_n
+                                if total_n > 0 else 0),
                         }
                         for i, yr in enumerate(test_years):
                             entry[f"roi_{yr}"] = rois[i]
                             entry[f"n_{yr}"] = ns[i]
+                            entry[f"hit_{yr}"] = hits[i]
 
                         mn = min(rois)
                         mr = min(ns)
@@ -512,20 +735,58 @@ def main():
     start = time.time()
     print("=" * 70)
     print("  E/F 荒れ予測 & ROI最適化")
+    if L1_ONLY:
+        print("  ★ L1-onlyモード (LGB/CB skip)")
     print("  E: fav1,2,3が1着にこない → 単勝ex3")
     print("  F: fav1,2,3が1,2着にこない → 馬単ex3")
     print("=" * 70)
 
-    # ---- Phase 1: 特徴量構築 ----
-    print("\n[1] 馬特徴量構築...")
+    # ---- Phase 1: 特徴量構築 + ファクター統合 ----
+    print("\n[1] 馬特徴量構築 (return_raw=True)...")
     sys.stdout.flush()
-    df = build_horse_features()
+    df = build_horse_features(
+        feature_groups=BEST_FEATURE_GROUPS, return_raw=True)
+
+    # 追加SED列 (不利/タイム等 — extra=True ファクター用)
+    print("  追加SED列をロード中...")
+    extra = _load_extra_prev_cols()
+    existing = set(df.columns)
+    extra_cols = [c for c in extra.columns
+                  if c not in existing or c == "horse_race_id"]
+    df = df.merge(extra[extra_cols], on="horse_race_id", how="left")
+
+    # 68ファクターを計算
+    print("  ファクター計算中...")
+    factor_cols = compute_factors(df)
+    print(f"  {len(factor_cols)}ファクター計算完了")
+
+    # ファクター二値列 + ターゲットを保存 (フォールド内L1推定用)
+    _fp = _to_numeric(df["finish_pos"])
+    _fpop = _to_numeric(df["final_pop"])
+    factor_binary_store = df[["race_id", "date"] + factor_cols].copy()
+    factor_binary_store["upset_horse"] = (
+        _fp.notna() & _fpop.notna() & (_fpop > 3) & (_fp <= 3)
+    ).astype(int)
+
+    # factor_score はフォールド毎に動的計算 (仮値0)
+    df["factor_score"] = 0.0
+
+    # 生列 + 個別ファクター列をドロップ (ML特徴量から除外)
+    drop_set = set(_RAW_DROP + factor_cols)
+    df = df.drop(
+        columns=[c for c in drop_set if c in df.columns],
+        errors="ignore")
+
     df, cat_cols = _prepare(df)
     feat_cols = sorted([c for c in df.columns if c not in DROP])
-    print(f"  {len(df)}行, {len(feat_cols)}特徴量")
+    cat_indices = [feat_cols.index(c) for c in cat_cols
+                   if c in feat_cols]
+    print(f"  {len(df)}行, {len(feat_cols)}特徴量"
+          f" (factor_score含む), cat={len(cat_indices)}")
     sys.stdout.flush()
 
     year = df["date"].str[:4]
+    rid_to_date = df.groupby("race_id")["date"].first().to_dict()
 
     # ---- Phase 2: SED確定人気データ ----
     print("\n[2] SED確定人気データ取得...")
@@ -535,15 +796,14 @@ def main():
     print(f"  {len(sed_pop)}件")
     sys.stdout.flush()
 
-    # ---- Rolling configs ----
+    # ---- Rolling configs (7年スライディングウィンドウ) ----
     configs = [
-        (["2018", "2019", "2020", "2021", "2022"], "2023", 7),
-        (["2018", "2019", "2020", "2021", "2022", "2023"],
-         "2024", 7),
-        (["2018", "2019", "2020", "2021", "2022", "2023",
-          "2024"], "2025", 7),
-        (["2018", "2019", "2020", "2021", "2022", "2023",
-          "2024", "2025"], "2026", 7),
+        ([str(y) for y in range(2013, 2020)], "2020", 7),
+        ([str(y) for y in range(2014, 2021)], "2021", 7),
+        ([str(y) for y in range(2015, 2022)], "2022", 7),
+        ([str(y) for y in range(2016, 2023)], "2023", 7),
+        ([str(y) for y in range(2017, 2024)], "2024", 7),
+        ([str(y) for y in range(2018, 2025)], "2025", 7),
     ]
     TEST_YEARS = [c[1] for c in configs]
 
@@ -566,27 +826,105 @@ def main():
         print(f"{'='*70}")
 
         # ---- 馬モデル学習 ----
-        print(f"\n  [3-{def_name}] 馬モデル学習...")
+        if L1_ONLY:
+            print(f"\n  [3-{def_name}] L1-only モード"
+                  " (LGB/CB skip, odds-implied + factor_score)...")
+        else:
+            print(f"\n  [3-{def_name}] 馬モデル学習"
+                  " (LGB+CB+Calibration)...")
         sys.stdout.flush()
 
         race_data = {}
         for tr_yrs, te_yr, n_seeds in configs:
             label = f"{tr_yrs[0]}-{tr_yrs[-1]}→{te_yr}"
-            print(f"\n    {label} (seed={n_seeds})")
+            print(f"\n    {label}")
             sys.stdout.flush()
+
+            # --- L1重みをフォールド内推定 (tr_yrsと同期間) ---
+            l1_yrs = tr_yrs
+            fold_weights = _fit_l1_weights(
+                factor_binary_store, factor_cols, l1_yrs)
+            n_nz = len(fold_weights)
+            print(f"    L1重み: {n_nz}個非ゼロ"
+                  f" (学習: {l1_yrs[0]}-{l1_yrs[-1]})")
+
+            # factor_score を全行更新 (このフォールドの重みで)
+            weight_vec = np.array(
+                [fold_weights.get(fc, 0) for fc in factor_cols])
+            df["factor_score"] = (
+                factor_binary_store[factor_cols]
+                .fillna(0).values @ weight_vec)
 
             tr = df[year.isin(tr_yrs)].reset_index(drop=True)
             te = df[year == te_yr].reset_index(drop=True)
             X_tr, y_tr = tr[feat_cols], tr[target_col]
             X_te, y_te = te[feat_cols], te[target_col]
 
-            pred = _train_lgb(X_tr, y_tr, X_te, y_te, n=n_seeds)
-            auc = roc_auc_score(y_te, pred)
-            pos_rate = y_te.mean()
-            print(f"    馬AUC ({target_col}): {auc:.4f}"
-                  f"  正例率: {pos_rate:.1%}")
+            if not L1_ONLY:
+                # LGB ensemble
+                lgb_pred = _train_lgb(
+                    X_tr, y_tr, X_te, y_te, n=n_seeds)
+                auc_lgb = roc_auc_score(y_te, lgb_pred)
+                print(f"    LGB AUC: {auc_lgb:.4f}")
+                sys.stdout.flush()
 
-            rf = _build_race_ef(te, pred, X_te, sed_pop, def_name)
+                # CatBoost ensemble
+                cb_pred = _train_cb(
+                    X_tr, y_tr, X_te, y_te, cat_indices, n=N_ENS_CB)
+                auc_cb = roc_auc_score(y_te, cb_pred)
+                print(f"    CB  AUC: {auc_cb:.4f}")
+                sys.stdout.flush()
+
+                # Isotonic calibration
+                cal_year = tr_yrs[-1]
+                cal_tr_yrs = tr_yrs[:-1]
+                if len(cal_tr_yrs) >= 1:
+                    cal_tr = df[year.isin(cal_tr_yrs)].reset_index(
+                        drop=True)
+                    cal_te = df[year == cal_year].reset_index(
+                        drop=True)
+                    X_cal_tr = cal_tr[feat_cols]
+                    y_cal_tr = cal_tr[target_col]
+                    X_cal_te = cal_te[feat_cols]
+                    y_cal_te = cal_te[target_col]
+                    lgb_cal = _train_lgb(
+                        X_cal_tr, y_cal_tr, X_cal_te, y_cal_te, n=5)
+                    cb_cal = _train_cb(
+                        X_cal_tr, y_cal_tr, X_cal_te, y_cal_te,
+                        cat_indices, n=N_ENS_CB)
+                    pred = _blend_and_calibrate(
+                        lgb_cal, cb_cal, y_cal_te,
+                        lgb_pred, cb_pred)
+                else:
+                    pred = (BLEND_WEIGHT_LGB * lgb_pred
+                            + (1 - BLEND_WEIGHT_LGB) * cb_pred)
+                auc_cal = roc_auc_score(y_te, pred)
+                print(f"    Calibrated AUC: {auc_cal:.4f}")
+            else:
+                # L1-only: オッズ由来の暗黙確率を使用
+                odds_col = "day_win_odds"
+                if odds_col in X_te.columns:
+                    odds = X_te[odds_col].values.astype(float)
+                    if def_name == "E":
+                        pred = np.clip(
+                            0.8 / np.maximum(odds, 1), 0.01, 0.95)
+                    else:  # F
+                        pred = np.clip(
+                            1.5 / np.maximum(odds, 1), 0.01, 0.95)
+                else:
+                    pred = np.full(len(X_te), 0.5)
+                print(f"    L1-only: odds-implied pred"
+                      f" (skip LGB/CB)")
+                sys.stdout.flush()
+
+            # ファクタースコアをレースレベル集約に渡す
+            te_mask = (factor_binary_store["date"].str[:4] == te_yr)
+            te_fs = (factor_binary_store.loc[te_mask, factor_cols]
+                     .fillna(0).values @ weight_vec)
+            fs_vals = te_fs if len(te_fs) == len(te) else None
+            rf = _build_race_ef(
+                te, pred, X_te, sed_pop, def_name,
+                factor_scores=fs_vals)
             race_data[te_yr] = rf
 
             n_upset = int(rf["actual_upset"].sum())
@@ -601,6 +939,56 @@ def main():
                     rf["actual_upset"], rf["p_product_odds"])
                 print(f"    レースAUC: naive={naive_auc:.4f},"
                       f" odds={odds_auc:.4f}")
+            sys.stdout.flush()
+
+        # ---- Stage 2: 荒れ予測モデル ----
+        print(f"\n  [S2-{def_name}] Stage2 荒れ予測モデル...")
+        sys.stdout.flush()
+        s2_feat_cols = sorted([
+            c for c in race_data[TEST_YEARS[0]].columns
+            if c not in ("race_id", "actual_upset")])
+        for te_yr_idx, te_yr in enumerate(TEST_YEARS):
+            prior_years = TEST_YEARS[:te_yr_idx]
+            rf = race_data[te_yr]
+            if len(prior_years) == 0:
+                rf["stage2_score"] = rf["p_product"]
+                print(f"    {te_yr}: Stage2 skip (prior=0), "
+                      f"fallback to p_product")
+                continue
+            s2_train = pd.concat(
+                [race_data[y] for y in prior_years],
+                ignore_index=True)
+            X_s2_tr = s2_train[s2_feat_cols]
+            y_s2_tr = s2_train["actual_upset"]
+            X_s2_te = rf[s2_feat_cols]
+            neg2 = int((y_s2_tr == 0).sum())
+            pos2 = int((y_s2_tr == 1).sum())
+            s2_preds = []
+            for i in range(10):
+                s2_p = {
+                    "objective": "binary", "metric": "auc",
+                    "learning_rate": 0.05, "num_leaves": 15,
+                    "max_depth": 4, "min_child_samples": 30,
+                    "subsample": 0.8, "colsample_bytree": 0.7,
+                    "reg_alpha": 0.1, "reg_lambda": 0.1,
+                    "scale_pos_weight": neg2 / max(pos2, 1),
+                    "verbose": -1, "n_jobs": -1,
+                    "seed": 42 + i * 7,
+                }
+                ds = lgb.Dataset(X_s2_tr, label=y_s2_tr)
+                m = lgb.train(
+                    params=s2_p, train_set=ds, num_boost_round=200)
+                s2_preds.append(m.predict(X_s2_te))
+            rf["stage2_score"] = np.median(s2_preds, axis=0)
+            race_data[te_yr] = rf
+            if rf["actual_upset"].nunique() > 1:
+                s2_auc = roc_auc_score(
+                    rf["actual_upset"], rf["stage2_score"])
+                print(f"    {te_yr}: Stage2 AUC={s2_auc:.4f}"
+                      f" (train={len(s2_train)}R)")
+            else:
+                print(f"    {te_yr}: Stage2 done"
+                      f" (train={len(s2_train)}R)")
             sys.stdout.flush()
 
         # ---- 払戻データ ----
@@ -666,10 +1054,10 @@ def main():
                 hdr = (f"    {'#':>2} {'score':>10}"
                        f" {'sel':>7} {'nh':>4} {'fo':>4} |")
                 for yr in TEST_YEARS:
-                    hdr += f" {yr:>12}"
-                hdr += f" | {'avg':>5} {'min':>5}"
+                    hdr += f" {yr:>16}"
+                hdr += f" | {'avg':>5} {'min':>5} {'hit%':>5}"
                 print(hdr)
-                print("    " + "-" * (55 + 13 * n_yrs))
+                print("    " + "-" * (59 + 17 * n_yrs))
                 for i, (_, r) in enumerate(
                         sub.head(15).iterrows()):
                     ff = (f"≤{r['ff']:.0f}"
@@ -681,11 +1069,15 @@ def main():
                         f" {r['type']:>7s}"
                         f" {ff:>4s} {fo:>4s} |")
                     for yr in TEST_YEARS:
+                        h = r.get(f'hit_{yr}', 0)
                         line += (
                             f" {r[f'roi_{yr}']:5.1f}%"
-                            f"({r[f'n_{yr}']:3.0f}R)")
+                            f"({r[f'n_{yr}']:3.0f}R"
+                            f"/{h:.0f}h)")
+                    hr = r.get('avg_hit_rate', 0)
                     line += (f" | {r['avg_roi']:5.1f}%"
-                             f" {r['min_roi']:5.1f}%")
+                             f" {r['min_roi']:5.1f}%"
+                             f" {hr:4.0%}")
                     print(line)
         else:
             print(f"\n    {n_yrs}年間全てROI>100%の戦略は"
@@ -717,7 +1109,8 @@ def main():
                         for yr in TEST_YEARS)
                     parts = " ".join(
                         f"{yr[2:]}={r[f'roi_{yr}']:5.1f}%"
-                        f"({r[f'n_{yr}']:3.0f}R)"
+                        f"({r[f'n_{yr}']:3.0f}R"
+                        f"/{r.get(f'hit_{yr}', 0):.0f}h)"
                         for yr in TEST_YEARS)
                     print(
                         f"    {r['score']:>10s}"
@@ -738,11 +1131,83 @@ def main():
                   f" {best['type']}{ff_s}{fo_s}"
                   f" {best['ticket']}")
             print(f"      平均ROI: {best['avg_roi']:.1f}%"
-                  f"  最低ROI: {best['min_roi']:.1f}%")
+                  f"  最低ROI: {best['min_roi']:.1f}%"
+                  f"  的中率: {best['avg_hit_rate']:.0%}")
+
+            # 年別詳細
+            tname = best["ticket"]
+            print(f"\n      {'年':>6s} {'ROI':>7s}"
+                  f" {'レース':>5s} {'的中':>4s}"
+                  f" {'的中率':>6s}"
+                  f" {'投資':>10s} {'払戻':>10s}"
+                  f" {'利益':>10s}")
+            print(f"      " + "-" * 65)
+
+            sum_cost, sum_ret, sum_n, sum_hit = 0, 0, 0, 0
             for yr in TEST_YEARS:
-                print(f"      {yr}:"
-                      f" ROI={best[f'roi_{yr}']:.1f}%"
-                      f" ({best[f'n_{yr}']:.0f}R)")
+                # 再計算して詳細を取得
+                rf = race_data[yr]
+                sc = year_scores[yr]
+                sn = best["score"]
+                pct = int(best["type"].replace("top", "")
+                          .replace("%", ""))
+                mask = np.ones(len(rf), dtype=bool)
+                if best["ff"] < 99:
+                    mask &= (rf["n_horses"].values
+                             <= best["ff"])
+                if best["fav1_o"] < 99:
+                    mask &= (rf["fav1_odds"].values
+                             <= best["fav1_o"])
+                all_s = sc[sn]
+                filt_s = all_s[mask]
+                cutoff = np.percentile(filt_s, 100 - pct)
+                sel_mask = mask & (all_s >= cutoff)
+                rids = rf["race_id"].values[sel_mask].tolist()
+                d = fast_roi_detail(
+                    econ[yr][tname], rids)
+                sum_cost += d["total_cost"]
+                sum_ret += d["total_ret"]
+                sum_n += d["n_races"]
+                sum_hit += d["n_hit"]
+                print(
+                    f"      {yr:>6s}"
+                    f" {d['roi']:6.1f}%"
+                    f" {d['n_races']:5d}"
+                    f" {d['n_hit']:4d}"
+                    f" {d['hit_rate']:5.0%}"
+                    f" {d['total_cost']:>10,}円"
+                    f" {d['total_ret']:>10,}円"
+                    f" {d['profit']:>+10,}円")
+            # 合計
+            total_roi = (sum_ret / sum_cost * 100
+                         if sum_cost > 0 else 0)
+            total_hr = (sum_hit / sum_n
+                        if sum_n > 0 else 0)
+            print(f"      " + "-" * 65)
+            print(
+                f"      {'合計':>6s}"
+                f" {total_roi:6.1f}%"
+                f" {sum_n:5d}"
+                f" {sum_hit:4d}"
+                f" {total_hr:5.0%}"
+                f" {sum_cost:>10,}円"
+                f" {sum_ret:>10,}円"
+                f" {sum_ret - sum_cost:>+10,}円")
+
+        # ---- 詳細データ保存 (月別分析用) ----
+        os.makedirs("output", exist_ok=True)
+        detail = {
+            "race_data": race_data,
+            "econ": econ,
+            "year_scores": year_scores,
+            "rid_to_date": rid_to_date,
+            "test_years": TEST_YEARS,
+            "winners": winners,
+            "candidates": candidates,
+        }
+        pkl_path = os.path.join("output", f"{def_name}_detail.pkl")
+        pickle.dump(detail, open(pkl_path, "wb"))
+        print(f"\n  詳細データを {pkl_path} に保存")
 
     elapsed = time.time() - start
     print(f"\n\n完了! ({elapsed:.1f}秒)")
